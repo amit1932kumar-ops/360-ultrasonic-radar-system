@@ -1,0 +1,165 @@
+#include <SoftwareSerial.h>
+SoftwareSerial sim800(2, 3); // RX, TX
+
+#define RELAY1 7   // Light
+#define RELAY2 8   // Fan
+
+String PHONE = "+91XXXXXXXXXX";   // <-- Your mobile number here
+String buffer = "";
+
+
+// ===========================
+// SETUP
+// ===========================
+void setup() {
+  Serial.begin(115200);
+  sim800.begin(9600);
+
+  pinMode(RELAY1, OUTPUT);
+  pinMode(RELAY2, OUTPUT);
+
+  digitalWrite(RELAY1, HIGH); // Light OFF
+  digitalWrite(RELAY2, HIGH); // Fan OFF
+
+  delay(3000);
+  Serial.println("Initializing SIM800...");
+
+  sendCommand("AT+CMGF=1");
+  sendCommand("AT+CSCS=\"GSM\"");
+  sendCommand("AT+CSMP=17,167,0,0");
+  sendCommand("AT+CNMI=1,2,0,0,0");
+}
+
+// ===========================
+// LOOP
+// ===========================
+void loop() {
+
+  if (sim800.available()) {
+    char c = sim800.read();
+    buffer += c;
+
+    if (c == '\n') {
+      Serial.println("RAW: " + buffer);
+      parseSMS(buffer);
+      buffer = "";
+    }
+  }
+}
+
+// ======================================================
+// PARSE SMS
+// ======================================================
+void parseSMS(String data) {
+
+  if (data.indexOf("+CMT:") != -1) {
+
+    int q1 = data.indexOf("\"", 5);
+    int q2 = data.indexOf("\"", q1 + 1);
+
+    String sender = data.substring(q1 + 1, q2);
+    Serial.println("Sender: " + sender);
+
+    // READ FULL MESSAGE BODY
+    String msg = "";
+    unsigned long start = millis();
+
+    while (millis() - start < 4000) {
+      while (sim800.available()) {
+        char c = sim800.read();
+        msg += c;
+
+        if (msg.indexOf("OK") != -1) break;
+      }
+
+      if (msg.indexOf("OK") != -1) break;
+    }
+
+    Serial.println("RAW FULL MSG: [" + msg + "]");
+
+    msg.replace("\r", "");
+    msg.replace("\n", "");
+    msg.trim();
+    msg.toLowerCase();
+
+    Serial.println("CLEAN MSG: [" + msg + "]");
+
+    // CHECK AUTHENTIC NUMBER
+    if (sender != PHONE) {
+      Serial.println("REJECTED: Unknown number");
+      return;
+    }
+
+    // ========================================
+    // COMMANDS
+    // ========================================
+
+    // Light
+    if (msg == "light on") {
+      digitalWrite(RELAY1, LOW);
+      sendSMS("Light ON");
+    }
+    else if (msg == "light off") {
+      digitalWrite(RELAY1, HIGH);
+      sendSMS("Light OFF");
+    }
+
+    // Fan
+    else if (msg == "fan on") {
+      digitalWrite(RELAY2, LOW);
+      sendSMS("Fan ON");
+    }
+    else if (msg == "fan off") {
+      digitalWrite(RELAY2, HIGH);
+      sendSMS("Fan OFF");
+    }
+
+    // ALL ON
+    else if (msg == "all on") {
+      digitalWrite(RELAY1, LOW);
+      digitalWrite(RELAY2, LOW);
+      sendSMS("All ON (Light + Fan)");
+    }
+
+    // ALL OFF
+    else if (msg == "all off") {
+      digitalWrite(RELAY1, HIGH);
+      digitalWrite(RELAY2, HIGH);
+      sendSMS("All OFF (Light + Fan)");
+    }
+
+    // STATUS
+    else if (msg == "status") {
+      String s = "";
+      s += "Light: ";
+      s += (digitalRead(RELAY1) == LOW) ? "ON" : "OFF";
+      s += "\nFan: ";
+      s += (digitalRead(RELAY2) == LOW) ? "ON" : "OFF";
+
+      sendSMS(s);
+    }
+
+    else {
+      sendSMS("Unknown Command: " + msg);
+    }
+  }
+}
+
+// ======================================================
+// SEND SMS
+// ======================================================
+void sendSMS(String text) {
+  sendCommand("AT+CMGF=1");
+  sim800.print("AT+CMGS=\"" + PHONE + "\"\r");
+  delay(500);
+  sim800.print(text);
+  delay(300);
+  sim800.write(26); // CTRL+Z
+  delay(1500);
+  Serial.println("Reply sent");
+}
+
+void sendCommand(String cmd) {
+  sim800.println(cmd);
+  delay(500);
+}
